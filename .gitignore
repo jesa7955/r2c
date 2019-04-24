@@ -102,3 +102,11 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# BERTs
+/data/bert_da*
+/data/*.jsonl
+/data/vcr1images
+/data/fine_tuned_bert
+/models/saves
+train.py
