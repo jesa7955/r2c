@@ -184,9 +184,6 @@ class MultiModalAttentionQA(Model):
 
         ##########################################
         # Self attetion
-        print(f"Model: {next(self.fusion_encoder.parameters()).device}")
-        print(f"Data: {que_ans_obj.device}")
-        print(f"Mask :{que_ans_obj_mask.device}")
         outputs = self.fusion_encoder(que_ans_obj, que_ans_obj_mask)
         bs, a_num, seq_len, output_dim = outputs.shape
         cls_reps = outputs[:, :, 1, :].squeeze(2)
