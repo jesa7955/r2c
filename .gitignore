@@ -110,3 +110,4 @@ venv.bak/
 /data/fine_tuned_bert
 /models/saves
 train.py
+experiments/*

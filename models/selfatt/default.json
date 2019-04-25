@@ -5,16 +5,21 @@
   "model": {
     "type": "MultiModalAttentionQA",
     "fusion_encoder": {
+        "type": "stacked_self_attention",
+        "input_dim": 768,
+        "hidden_dim": 512,
+        "projection_dim": 64,
+        "feedforward_hidden_dim": 2048,
+        "num_layers": 6,
+        "num_attention_heads": 8,
+        "use_positional_encoding": false
     },
-    "final_mlp_dim": 512,
+    "feature_dim": 768,
+    "final_mlp_hidden_dim": 1024,
     "input_dropout": 0.3,
     "initializer": [
     [".*final_mlp.*weight", {"type": "xavier_uniform"}],
-    [".*final_mlp.*bias", {"type": "zero"}],
-    [".*weight_ih.*", {"type": "xavier_uniform"}],
-    [".*weight_hh.*", {"type": "orthogonal"}],
-    [".*bias_ih.*", {"type": "zero"}],
-    [".*bias_hh.*", {"type": "lstm_hidden_bias"}]]
+    [".*final_mlp.*bias", {"type": "zero"}]]
   },
   "trainer": {
     "optimizer": {

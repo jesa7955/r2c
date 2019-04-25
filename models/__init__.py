@@ -1,5 +1,6 @@
 from models import *
 from models.multiatt import model
+from models.selfatt import selfattn
 
 # You can add more models in this folder. like
 # from models.no_question import model
