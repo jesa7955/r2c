@@ -20,34 +20,48 @@ from allennlp.nn.util import masked_softmax, weighted_sum, \
                              add_sentence_boundary_token_ids
 from allennlp.nn import InitializerApplicator
 
+
 @Model.register("MultiModalAttentionQA")
 class MultiModalAttentionQA(Model):
-    def __init__(self,
-                 vocab: Vocabulary,
-                 fusion_encoder: Seq2SeqEncoder,
-                 type_vocab_size: int = 3,
-                 feature_dim: int = 768,
-                 final_mlp_hidden_dim: int = 1024,
-                 input_dropout: float = 0.3,
-                 class_embs: bool=True,
-                 reasoning_use_obj: bool=True,
-                 reasoning_use_answer: bool=True,
-                 reasoning_use_question: bool=True,
-                 initializer: InitializerApplicator = InitializerApplicator(),
-                 ):
+    def __init__(
+            self,
+            vocab: Vocabulary,
+            fusion_encoder: Seq2SeqEncoder,
+            type_vocab_size: int = 3,
+            feature_dim: int = 768,
+            final_mlp_hidden_dim: int = 1024,
+            input_dropout: float = 0.3,
+            class_embs: bool = True,
+            trainable_positional_embs: bool = True,
+            max_sequence_length: int = 256,
+            reasoning_use_obj: bool = True,
+            reasoning_use_answer: bool = True,
+            reasoning_use_question: bool = True,
+            initializer: InitializerApplicator = InitializerApplicator(),
+    ):
         super(MultiModalAttentionQA, self).__init__(vocab)
 
-        self.detector = SimpleDetector(pretrained=True,
-                                       average_pool=True,
-                                       semantic=class_embs,
-                                       final_dim=feature_dim)
+        self.detector = SimpleDetector(
+            pretrained=True,
+            average_pool=True,
+            semantic=class_embs,
+            final_dim=feature_dim)
         ######################################################################
 
+        # Set up type embedding for distinguishing between questions, answers
+        # and image features
         self.token_type_embeddings = nn.Embedding(type_vocab_size, feature_dim)
         self.bos_token = torch.randn(feature_dim)
         self.eos_token = torch.randn(feature_dim)
 
-        self.encoder_input_dropout = TimeDistributed(InputVariationalDropout(input_dropout)) if input_dropout > 0 else None
+        # Set up trainable positional embedding
+        self.positional_embeddings = nn.Embedding(
+            max_sequence_length,
+            feature_dim) if trainable_positional_embs else None
+
+        self.encoder_input_dropout = TimeDistributed(
+            InputVariationalDropout(
+                input_dropout)) if input_dropout > 0 else None
 
         self.feature_dim = feature_dim
         self.fusion_encoder = TimeDistributed(fusion_encoder)
@@ -105,80 +119,104 @@ class MultiModalAttentionQA(Model):
         boxes = boxes[:, :max_len]
         segms = segms[:, :max_len]
 
-        for tag_type, the_tags in (('question', question_tags), ('answer', answer_tags)):
+        for tag_type, the_tags in (('question', question_tags), ('answer',
+                                                                 answer_tags)):
             if int(the_tags.max()) > max_len:
-                raise ValueError("Oh no! {}_tags has maximum of {} but objects is of dim {}. Values are\n{}".format(
-                    tag_type, int(the_tags.max()), objects.shape, the_tags
-                ))
+                raise ValueError(
+                    "Oh no! {}_tags has maximum of {} but objects is of dim {}. Values are\n{}".
+                    format(tag_type, int(the_tags.max()), objects.shape,
+                           the_tags))
 
-        obj_reps = self.detector(images=images, boxes=boxes, box_mask=box_mask, classes=objects, segms=segms)
+        obj_reps = self.detector(
+            images=images,
+            boxes=boxes,
+            box_mask=box_mask,
+            classes=objects,
+            segms=segms)
 
         ##################################################
         # Concatenate words features and object features #
         # at the dim of sequence                         #
         ##################################################
 
-        obj_features = obj_reps['obj_reps']
-        obj_bs, obj_len, obj_dim = obj_features.shape
+        obj_bs, obj_len, obj_dim = obj_reps['obj_reps'].shape
         que_bs, a_num, que_len, que_dim = question['bert'].shape
         ans_bs, a_num, ans_len, ans_dim = answers['bert'].shape
 
-        # Add [SEP] and [CLS]. What is really done here is wrap question,
-        # answers, and images obejcts with <S> </S> then remove the last
-        # two <S> and view the first one as [CLS]
-        question_bert, question_mask = add_sentence_boundary_token_ids(
-                                           question['bert'].view(-1, que_len, que_dim),
-                                           question_mask,
-                                           self.bos_token.to(question_mask.device),
-                                           self.eos_token.to(question_mask.device))
-        question_bert = question_bert.view(que_bs, a_num, que_len+2, que_dim)
-        question_mask = question_mask.view(que_bs, a_num, que_len+2)
-        answers_bert, answer_mask = add_sentence_boundary_token_ids(
-                                        answers['bert'].view(-1, ans_len, ans_dim),
-                                        answer_mask,
-                                        self.bos_token.to(answer_mask.device),
-                                        self.eos_token.to(answer_mask.device))
-        answers_bert = answers_bert.view(ans_bs, a_num, ans_len+2, ans_dim)[:, :, 1:, :]
-        answer_mask = answer_mask.view(ans_bs, a_num, ans_len+2)[:, :, 1:]
+        # Add [SEP] and [CLS]. What is really done here is wrap image obejcts,
+        # questions, and answers with <S> and </S> then remove the last two <S>
+        # and view the first one as [CLS]
         obj_features, obj_mask = add_sentence_boundary_token_ids(
-                                     obj_features,
-                                     box_mask,
-                                     self.bos_token.to(box_mask.device),
-                                     self.eos_token.to(box_mask.device))
-        obj_features = obj_features.view(obj_bs, obj_len+2, obj_dim)[:, 1:, :]
-        obj_mask = obj_mask.view(obj_bs, obj_len+2)[:, 1:]
-        obj_features = torch.stack([obj_features for _ in range(a_num)], dim=1)
-        obj_mask = torch.stack([obj_mask for _ in range(a_num)], dim=1)
+            obj_reps['obj_reps'], box_mask, self.bos_token.to(box_mask.device),
+            self.eos_token.to(box_mask.device))
+        obj_features = obj_features.view(obj_bs, obj_len + 2, obj_dim)
+        obj_mask = obj_mask.view(obj_bs, obj_len + 2)
+        obj_features = obj_features.repeat(a_num, 1, 1, 1).view(
+            obj_bs, a_num, obj_len + 2, obj_dim)
+        obj_mask = obj_mask.repeat(a_num, 1, 1).view(obj_bs, a_num,
+                                                     obj_len + 2)
+        question_bert, question_mask = add_sentence_boundary_token_ids(
+            question['bert'].view(-1, que_len, que_dim), question_mask,
+            self.bos_token.to(question_mask.device),
+            self.eos_token.to(question_mask.device))
+        question_bert = question_bert.view(que_bs, a_num, que_len + 2,
+                                           que_dim)[:, :, 1:, :]
+        question_mask = question_mask.view(que_bs, a_num,
+                                           que_len + 2)[:, :, 1:]
+        answers_bert, answer_mask = add_sentence_boundary_token_ids(
+            answers['bert'].view(-1, ans_len, ans_dim), answer_mask,
+            self.bos_token.to(answer_mask.device),
+            self.eos_token.to(answer_mask.device))
+        answers_bert = answers_bert.view(ans_bs, a_num, ans_len + 2,
+                                         ans_dim)[:, :, 1:, :]
+        answer_mask = answer_mask.view(ans_bs, a_num, ans_len + 2)[:, :, 1:]
         # The shape for the input of transformer is
         # batch_size * num_answers * new_seq_length * dim
         # where new_seq_length = question_seq_length + 2 +
         #                        answer_seq_lenght + 1 +
         #                        max_num_objects + 1
-        que_ans_obj = torch.cat((question_bert,
-                                  answers_bert,
-                                  obj_features), dim=2)
-        que_ans_obj_mask = torch.cat((question_mask,
-                                      answer_mask,
-                                      obj_mask), dim=2)
+        que_ans_obj = torch.cat(
+            (obj_features, question_bert, answers_bert), dim=2)
+        que_ans_obj_mask = torch.cat(
+            (obj_mask, question_mask, answer_mask), dim=2)
 
         # Add positional features
         total_bs, a_num, total_len, total_dim = que_ans_obj.shape
-        que_ans_obj = add_positional_features(que_ans_obj.view(-1,
-                                                               total_len,
-                                                               total_dim)).view(total_bs,
-                                                                                a_num,
-                                                                                total_len,
-                                                                                total_dim)
+        target_device = que_ans_obj.device
+        if self.positional_embeddings:
+            # 0 for [CLS], 1 for image objects, sequence positional
+            # embeddings start from 2
+            cls_pos = torch.zeros(
+                total_bs, a_num, 1, dtype=torch.long, device=target_device)
+            objs_pos = 1 - torch.zeros(
+                obj_bs, a_num, obj_len, dtype=torch.long, device=target_device)
+            # 2: sequences' positional embeddings start from 2
+            # 3: including the three </S>s
+            seq_len = que_len + ans_len + 3
+            seq_pos = torch.arange(
+                start=2,
+                end=2 + seq_len,
+                dtype=torch.long,
+                device=target_device).expand(total_bs, a_num, -1)
+            total_pos = torch.cat((cls_pos, objs_pos, seq_pos), dim=2)
+            assert total_pos.shape[2] == total_len
+            positional_embeddings = self.positional_embeddings(total_pos)
+            que_ans_obj = que_ans_obj + positional_embeddings
+        else:
+            que_ans_obj = add_positional_features(
+                que_ans_obj.view(-1, total_len, total_dim)).view(
+                    total_bs, a_num, total_len, total_dim)
 
         # Add type information, which is used to distinguished between
         # Qution, Answer, and Images
-        target_device = que_ans_obj.device
-        question_type_ids = torch.zeros(que_bs, a_num, que_len+2, dtype=torch.long, device=target_device)
-        answers_type_ids = 1 - torch.zeros(ans_bs, a_num, ans_len+1, dtype=torch.long, device=target_device)
-        objs_type_ids = 2 - torch.zeros(obj_bs, a_num, obj_len+1, dtype=torch.long, device=target_device)
-        token_type_ids = torch.cat((question_type_ids,
-                                    answers_type_ids,
-                                    objs_type_ids), dim=2)
+        objs_type_ids = torch.zeros(
+            obj_bs, a_num, obj_len + 2, dtype=torch.long, device=target_device)
+        question_type_ids = 1 - torch.zeros(
+            que_bs, a_num, que_len + 1, dtype=torch.long, device=target_device)
+        answers_type_ids = 2 - torch.zeros(
+            ans_bs, a_num, ans_len + 1, dtype=torch.long, device=target_device)
+        token_type_ids = torch.cat(
+            (objs_type_ids, question_type_ids, answers_type_ids), dim=2)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
         que_ans_obj = que_ans_obj + token_type_embeddings
 
@@ -196,12 +234,14 @@ class MultiModalAttentionQA(Model):
 
         class_probabilities = F.softmax(logits, dim=-1)
 
-        output_dict = {"label_logits": logits, "label_probs": class_probabilities,
-                       'cnn_regularization_loss': obj_reps['cnn_regularization_loss'],
-                       # Uncomment to visualize attention, if you want
-                       # 'qa_attention_weights': qa_attention_weights,
-                       # 'atoo_attention_weights': atoo_attention_weights,
-                       }
+        output_dict = {
+            "label_logits": logits,
+            "label_probs": class_probabilities,
+            'cnn_regularization_loss': obj_reps['cnn_regularization_loss'],
+            # Uncomment to visualize attention, if you want
+            # 'qa_attention_weights': qa_attention_weights,
+            # 'atoo_attention_weights': atoo_attention_weights,
+        }
         if label is not None:
             loss = self._loss(logits, label.long().view(-1))
             self._accuracy(logits, label)
