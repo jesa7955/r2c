@@ -18,6 +18,8 @@
     "final_mlp_hidden_dim": 1024,
     "input_dropout": 0.3,
     "initializer": [
+    [".*fusion_encoder.*weight", {"type": "xavier_uniform"}],
+    [".*fusion_encoder.*bias", {"type": "xavier_uniform"}],
     [".*final_mlp.*weight", {"type": "xavier_uniform"}],
     [".*final_mlp.*bias", {"type": "zero"}]]
   },
