@@ -111,3 +111,4 @@ venv.bak/
 /models/saves
 train.py
 experiments/*
+.ycm_extra_conf.py
